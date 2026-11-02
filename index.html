@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Aura Launcher</title>
+  <title>Aura Launcher Legacy</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -10,7 +10,7 @@
 <!-- TITLEBAR -->
 <div class="titlebar">
   <div class="titlebar-drag-region">
-    <span class="titlebar-title">Aura Launcher</span>
+    <span class="titlebar-title">Aura Launcher Legacy</span>
   </div>
   <div class="titlebar-controls">
     <button onclick="window.electron.ipcRenderer.send('window-minimize')">—</button>
@@ -29,7 +29,7 @@
       <div class="logo-box">A</div>
       <div>
         <h1>Aura</h1>
-        <p>Client Launcher</p>
+        <p>LEGACY EDITION</p>
       </div>
     </div>
 
@@ -77,7 +77,7 @@
 
       <section class="banner">
         <div>
-          <span>AURA CLIENT</span>
+          <span>LEGACY EDITION</span>
           <h3>Ready to Play?</h3>
           <p>Select your client version below and hit PLAY to launch Minecraft instantly.</p>
         </div>
@@ -219,7 +219,7 @@
         <select id="accentColor" onchange="changeAccent()">
           <option value="#22c55e">Emerald Green</option>
           <option value="#3b82f6">Ocean Blue</option>
-          <option value="#a855f7">Royal Purple</option>
+          <option value="#a855f7" selected>Royal Purple</option>
           <option value="#ef4444">Crimson Red</option>
         </select>
 
@@ -243,6 +243,8 @@
         </div>
 
         <button class="dark-btn full-btn" onclick="checkForUpdates()">Check For Launcher Updates</button>
+        <button class="dark-btn full-btn" onclick="resetSettings()">Reset Settings</button>
+        <p class="muted" style="font-size:12px; margin-top:8px;">Reset restores launcher preferences only. Accounts and Minecraft files are not deleted.</p>
       </div>
     </section>
 
@@ -275,10 +277,13 @@
       <section class="panel-grid">
         <div class="card" style="text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 24px;">
           <div class="logo-box" style="width: 80px; height: 80px; font-size: 40px; margin-bottom: 16px; box-shadow: 0 15px 35px var(--accent-glow);">A</div>
-          <h2 style="margin-bottom: 4px;">Aura Launcher</h2>
-          <p style="margin-bottom: 24px; font-weight: bold; color: var(--accent);">Version 2.0.0-beta.1</p>
+          <h2 style="margin-bottom: 4px;">Aura Launcher Legacy</h2>
+          <p id="aboutVersion" style="margin-bottom: 12px; font-weight: bold; color: var(--accent);">Version v2.0.1</p>
+          <p id="aboutBuildInfo" class="muted" style="margin-bottom: 18px; font-size:12px;">Loading build information...</p>
+          <p class="about-note">A lightweight launcher for managing and starting Minecraft clients.</p>
+          <button class="dark-btn" onclick="copyDiagnostics()" style="width:80%; margin-bottom:10px;">Copy Diagnostics</button>
           
-          <button class="dark-btn" onclick="window.electron.ipcRenderer.invoke('open-external', 'https://github.com/Advait8370/aura-client')" style="width: 80%;">
+          <button class="dark-btn" onclick="window.electron.ipcRenderer.invoke('open-external', 'https://github.com/Advait8370/aura.client.legacy')" style="width: 80%;">
             View on GitHub
           </button>
         </div>
@@ -324,7 +329,10 @@
     <h2 style="color:var(--danger);">Minecraft Crashed</h2>
     <p id="crashText">Exit Code: Unknown</p>
     <textarea id="crashLog" readonly></textarea>
-    <button class="danger-btn full-btn" onclick="closeCrashModal()">Dismiss</button>
+    <div class="button-row">
+      <button class="dark-btn" onclick="copyErrorReport()">Copy Error Report</button>
+      <button class="danger-btn" onclick="closeCrashModal()">Dismiss</button>
+    </div>
   </div>
 </div>
 

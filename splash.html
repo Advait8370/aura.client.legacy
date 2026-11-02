@@ -2,198 +2,263 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Aura Splash</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aura Launcher Legacy</title>
   <style>
     :root {
-      --accent: #22c55e;
-      --accent-secondary: #0ea5e9;
-      --bg: #05070a;
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
+      --bg: #11151b;
+      --panel: #171d26;
+      --text: #f1f4f8;
+      --muted: #98a4b4;
+      --accent: #91a2ba;
+      --accent-bright: #c2cedd;
+      --line: rgba(220, 230, 244, .11);
     }
+
+    * { box-sizing: border-box; }
 
     html, body {
+      width: 100%;
+      height: 100%;
       margin: 0;
-      padding: 0;
+      overflow: hidden;
       background: transparent;
-      overflow: hidden;
-      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-family: "Segoe UI", Inter, system-ui, sans-serif;
     }
 
-    /* Main Window Container */
-    .splash-wrapper {
-      width: 100vw;
-      height: 100vh;
-      background: var(--bg);
-      border-radius: 16px;
-      box-sizing: border-box;
+    .splash {
       position: relative;
-      -webkit-app-region: drag;
+      width: 100%;
+      height: 100%;
       overflow: hidden;
-      /* Subtle inner border for depth */
-      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 
-                  0 20px 40px rgba(0, 0, 0, 0.5);
-    }
-
-    /* --- ANIMATED BACKGROUND ORBS --- */
-    .orb {
-      position: absolute;
-      border-radius: 50%;
-      filter: blur(50px);
-      z-index: 0;
-      animation: floatOrb 8s infinite alternate ease-in-out;
-    }
-
-    .orb-1 {
-      width: 250px;
-      height: 250px;
-      background: rgba(34, 197, 94, 0.25);
-      top: -50px;
-      right: -50px;
-    }
-
-    .orb-2 {
-      width: 200px;
-      height: 200px;
-      background: rgba(14, 165, 233, 0.2);
-      bottom: -40px;
-      left: -40px;
-      animation-delay: -4s;
-    }
-
-    /* Heavy Glassmorphic Overlay */
-    .glass-overlay {
-      position: absolute;
-      inset: 0;
-      z-index: 1;
-      backdrop-filter: blur(40px) saturate(120%);
-      background: linear-gradient(135deg, rgba(5, 7, 10, 0.4), rgba(5, 7, 10, 0.8));
-    }
-
-    /* --- CONTENT --- */
-    .content {
-      position: absolute;
-      inset: 0;
-      z-index: 2;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      animation: fadeIn 1s ease-out;
+      padding: 42px;
+      color: var(--text);
+      background:
+        radial-gradient(ellipse at 50% 0%, rgba(125, 145, 174, .16), transparent 52%),
+        linear-gradient(145deg, #1a2029 0%, #11151c 58%, #0c1016 100%);
+      border: 1px solid rgba(218, 229, 244, .16);
+      border-radius: 18px;
+      box-shadow: 0 28px 80px rgba(0, 0, 0, .52), inset 0 1px 0 rgba(255,255,255,.045);
+      -webkit-app-region: drag;
     }
 
-    /* Floating Logo */
-    .logo-box {
-      width: 80px;
-      height: 80px;
+    .ambient {
+      position: absolute;
+      width: 340px;
+      height: 340px;
+      border: 1px solid rgba(185, 202, 225, .07);
+      border-radius: 50%;
+      top: -215px;
+      right: -115px;
+      box-shadow: 0 0 0 28px rgba(185,202,225,.018), 0 0 0 58px rgba(185,202,225,.014);
+      pointer-events: none;
+    }
+
+    .brand-mark {
+      width: 86px;
+      height: 86px;
       display: grid;
       place-items: center;
-      border-radius: 20px;
-      background: linear-gradient(135deg, var(--accent), #15803d);
-      color: #04130a;
-      box-shadow: 0 15px 35px rgba(34, 197, 94, 0.4), 
-                  inset 0 2px 4px rgba(255, 255, 255, 0.3);
-      font-size: 42px;
-      font-weight: 900;
-      margin-bottom: 24px;
-      animation: floatLogo 4s infinite ease-in-out;
+      margin-bottom: 26px;
+      border: 1px solid rgba(230, 238, 248, .22);
+      border-radius: 22px;
+      background: linear-gradient(145deg, #74859d, #394555);
+      color: #fff;
+      font-size: 43px;
+      font-weight: 800;
+      letter-spacing: -4px;
+      box-shadow: 0 16px 34px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.28);
+      animation: markIn .65s cubic-bezier(.2,.8,.2,1) both;
     }
 
-    /* Gradient Title */
-    .title {
-      font-size: 24px;
-      font-weight: 900;
-      margin: 0 0 6px 0;
-      letter-spacing: -0.5px;
-      background: linear-gradient(to right, var(--text), #bbf7d0);
-      background-clip: text;
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
-    .subtitle {
-      color: var(--text-muted);
-      font-size: 13px;
-      font-weight: 600;
-      margin: 0 0 40px 0;
-      letter-spacing: 0.5px;
-    }
-
-    /* Sleek Loading Bar */
-    .progress-container {
-      width: 220px;
-      height: 4px;
-      background: rgba(255, 255, 255, 0.05);
-      border-radius: 99px;
-      overflow: hidden;
-      position: relative;
-      box-shadow: inset 0 1px 2px rgba(0,0,0,0.5);
-    }
-
-    .progress-bar {
-      width: 40%;
-      height: 100%;
-      background: linear-gradient(90deg, transparent, var(--accent), transparent);
-      border-radius: 99px;
-      box-shadow: 0 0 15px var(--accent);
-      animation: slide 1.5s infinite ease-in-out;
-    }
-
-    /* Version Footer */
-    .version {
-      position: absolute;
-      bottom: 16px;
-      left: 0;
-      right: 0;
-      text-align: center;
-      color: rgba(255, 255, 255, 0.2);
+    .edition {
+      margin: 0 0 10px;
+      color: #aab7c8;
       font-size: 10px;
       font-weight: 700;
-      letter-spacing: 1px;
-      z-index: 2;
+      letter-spacing: .2em;
+      text-transform: uppercase;
     }
 
-    /* --- KEYFRAMES --- */
-    @keyframes floatOrb {
-      0% { transform: translate(0, 0) scale(1); }
-      100% { transform: translate(-30px, 20px) scale(1.1); }
+    h1 {
+      margin: 0;
+      color: var(--text);
+      font-size: 27px;
+      line-height: 1.2;
+      font-weight: 700;
+      letter-spacing: -.7px;
+      text-align: center;
     }
 
-    @keyframes floatLogo {
-      0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(-8px); }
+    .tagline {
+      margin: 11px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+      text-align: center;
+      letter-spacing: .015em;
     }
 
-    @keyframes slide {
-      0% { transform: translateX(-150%); }
-      100% { transform: translateX(250%); }
+    .loading {
+      width: min(300px, 100%);
+      margin-top: 52px;
     }
 
-    @keyframes fadeIn {
-      from { opacity: 0; transform: scale(0.95); }
-      to { opacity: 1; transform: scale(1); }
+    .loading-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 11px;
+      color: #b9c4d2;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .025em;
+    }
+
+    .loading-row .state {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #8e9bad;
+      font-weight: 500;
+    }
+
+    .pulse {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #a9bacf;
+      box-shadow: 0 0 10px rgba(169,186,207,.6);
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    .track {
+      width: 100%;
+      height: 4px;
+      overflow: hidden;
+      border-radius: 20px;
+      background: rgba(255,255,255,.09);
+    }
+
+    .bar {
+      width: 34%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #71839c, #d0dae7, #71839c);
+      animation: loading 1.8s ease-in-out infinite;
+      transition: width .25s ease;
+    }
+
+    .bar.progress-mode {
+      width: 0%;
+      animation: none;
+    }
+
+    .bar.progress-mode[style*="width: 100%"] {
+      background: #c2cedd;
+    }
+
+    .footer {
+      position: absolute;
+      right: 25px;
+      bottom: 21px;
+      left: 25px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      color: #758294;
+      font-size: 10px;
+      letter-spacing: .04em;
+    }
+
+    .footer .version {
+      color: #a9b6c7;
+      font-weight: 700;
+      letter-spacing: .08em;
+    }
+
+    @keyframes loading {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(310%); }
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: .45; transform: scale(.85); }
+      50% { opacity: 1; transform: scale(1.15); }
+    }
+    @keyframes markIn {
+      from { opacity: 0; transform: translateY(9px) scale(.96); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; }
     }
   </style>
 </head>
 <body>
-  <div class="splash-wrapper">
-    <!-- Animated background layers -->
-    <div class="orb orb-1"></div>
-    <div class="orb orb-2"></div>
-    <div class="glass-overlay"></div>
+  <main class="splash">
+    <div class="ambient"></div>
 
-    <!-- Foreground UI -->
-    <div class="content">
-      <div class="logo-box">A</div>
-      <h1 class="title">Aura Launcher</h1>
-      <p class="subtitle">Waking up components...</p>
-      
-      <div class="progress-container">
-        <div class="progress-bar"></div>
+    <div class="brand-mark" aria-hidden="true">A</div>
+    <p class="edition">Legacy Edition</p>
+    <h1>Aura Launcher Legacy</h1>
+    <p class="tagline">Your Minecraft experience, ready when you are.</p>
+
+    <section class="loading" aria-label="Launcher loading">
+      <div class="loading-row">
+        <span id="loadingTitle">Starting launcher</span>
+        <span class="state"><i class="pulse" id="statusPulse"></i><span id="loadingStatus">Please wait</span></span>
       </div>
-    </div>
+      <div class="track"><div class="bar" id="loadingBar"></div></div>
+    </section>
 
-    <div class="version">V2.0.0-BETA.1</div>
-  </div>
+    <footer class="footer">
+      <span>MADE FOR YOUR NEXT ADVENTURE</span>
+      <span class="version">v2.0.1</span>
+    </footer>
+  </main>
+
+  <script>
+    const title = document.getElementById("loadingTitle");
+    const status = document.getElementById("loadingStatus");
+    const bar = document.getElementById("loadingBar");
+    const pulse = document.getElementById("statusPulse");
+
+    window.electron?.ipcRenderer?.on("update-status", (message) => {
+      const text = String(message || "Starting launcher...");
+      title.textContent = text.toLowerCase().includes("download")
+        ? "Downloading update"
+        : text.toLowerCase().includes("checking")
+          ? "Checking for updates"
+          : "Starting launcher";
+      status.textContent = text;
+      const normalized = text.toLowerCase();
+      if (normalized.includes("download")) {
+        bar.classList.add("progress-mode");
+      } else if (
+        normalized.includes("up to date") ||
+        normalized.includes("unavailable") ||
+        normalized.includes("starting launcher") ||
+        normalized.includes("update ready")
+      ) {
+        bar.classList.remove("progress-mode");
+        bar.style.width = "";
+      }
+    });
+
+    window.electron?.ipcRenderer?.on("update-progress", (percent) => {
+      const value = Math.max(0, Math.min(100, Number(percent) || 0));
+      bar.classList.add("progress-mode");
+      bar.style.width = value + "%";
+      title.textContent = "Downloading update";
+      status.textContent = Math.round(value) + "%";
+    });
+  </script>
 </body>
 </html>

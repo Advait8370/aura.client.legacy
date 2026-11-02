@@ -79,7 +79,17 @@ const updateProgressText = document.getElementById("updateProgressText");
 // --- STATE ---
 let clientsCache = [];
 let currentAccount = readCurrentAccount();
-let settings = JSON.parse(localStorage.getItem("auraSettings") || "{}");
+function readStoredSettings() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem("auraSettings") || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    console.warn("Saved settings could not be read; using defaults.", error);
+    return {};
+  }
+}
+
+let settings = readStoredSettings();
 let javaPath = settings.javaPath || "java";
 let gameDir = settings.gameDir || "";
 let closeAfterLaunch = settings.closeAfterLaunch || false;
@@ -264,17 +274,31 @@ function updateRamReadout() {
 }
 
 function saveSettings() {
+  const ramInput = document.getElementById("ram");
+  const requestedRam = Number(ramInput ? ramInput.value : 2);
+  const safeRam = Math.min(16, Math.max(1, Number.isFinite(requestedRam) ? Math.round(requestedRam) : 2));
+
+  if (ramInput) ramInput.value = String(safeRam);
+
   settings = {
-    ram: document.getElementById("ram").value,
-    updateChannel: document.getElementById("updateChannel") ? document.getElementById("updateChannel").value : "release",
-    javaPath,
-    gameDir,
-    closeAfterLaunch: closeAfterLaunchInput.checked
+    ram: String(safeRam),
+    updateChannel: document.getElementById("updateChannel")
+      ? (document.getElementById("updateChannel").value === "beta" ? "beta" : "release")
+      : "release",
+    javaPath: typeof javaPath === "string" ? javaPath : "java",
+    gameDir: typeof gameDir === "string" ? gameDir : "",
+    closeAfterLaunch: Boolean(closeAfterLaunchInput && closeAfterLaunchInput.checked)
   };
 
   closeAfterLaunch = settings.closeAfterLaunch;
   localStorage.setItem("auraSettings", JSON.stringify(settings));
-  if(statusText) statusText.innerText = "Settings saved";
+  updateRamReadout();
+  window.electron.ipcRenderer.invoke(
+    "set-update-channel",
+    settings.updateChannel
+  ).catch((error) => console.warn("Could not sync update channel:", error));
+  showNotice("Settings saved", "success");
+  if (statusText) statusText.innerText = "Settings saved";
 }
 
 function loadSettings() {
@@ -282,15 +306,18 @@ function loadSettings() {
   const updateChannelSelect = document.getElementById("updateChannel");
   const themeSelect = document.getElementById("theme");
   const accentSelect = document.getElementById("accentColor");
-  const savedTheme = localStorage.getItem("auraTheme") || "dark";
-  const savedAccent = localStorage.getItem("auraAccent") || "#22c55e";
+  const savedTheme = localStorage.getItem("auraTheme") === "light" ? "light" : "dark";
+  const allowedAccents = ["#22c55e", "#3b82f6", "#a855f7", "#ef4444"];
+  const storedAccent = localStorage.getItem("auraAccent") || "#22c55e";
+  const savedAccent = allowedAccents.includes(storedAccent) ? storedAccent : "#22c55e";
 
   document.body.dataset.theme = savedTheme;
   document.documentElement.style.setProperty("--accent", savedAccent);
 
   if (ramSlider) {
-    ramSlider.value = settings.ram || "2";
-    updateRamReadout(); // Set the initial text on boot
+    const savedRam = Number(settings.ram);
+    ramSlider.value = String(Math.min(16, Math.max(1, Number.isFinite(savedRam) && savedRam > 0 ? Math.round(savedRam) : 2)));
+    updateRamReadout();
   }
   if (updateChannelSelect) updateChannelSelect.value = settings.updateChannel || "release";
   if (themeSelect) themeSelect.value = savedTheme;
@@ -298,6 +325,136 @@ function loadSettings() {
   if (javaPathInput) javaPathInput.value = javaPath === "java" ? "" : javaPath;
   if (gameDirInput) gameDirInput.value = gameDir || "";
   if (closeAfterLaunchInput) closeAfterLaunchInput.checked = closeAfterLaunch;
+
+  window.electron.ipcRenderer.invoke(
+    "set-update-channel",
+    settings.updateChannel === "beta" ? "beta" : "release"
+  ).catch((error) => {
+    console.warn("Could not sync update channel:", error);
+  });
+}
+
+// --- LIGHTWEIGHT IN-APP NOTIFICATIONS ---
+let noticeTimer = null;
+let lastLaunchError = null;
+let lastMinecraftExitCode = null;
+
+function showNotice(message, type = "info") {
+  let notice = document.getElementById("auraNotice");
+  if (!notice) {
+    notice = document.createElement("div");
+    notice.id = "auraNotice";
+    notice.className = "aura-notice";
+    notice.setAttribute("role", "status");
+    notice.setAttribute("aria-live", "polite");
+    document.body.appendChild(notice);
+  }
+
+  notice.textContent = String(message || "");
+  notice.dataset.type = ["success", "error", "info"].includes(type) ? type : "info";
+  notice.classList.add("visible");
+
+  if (noticeTimer) clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => notice.classList.remove("visible"), 2800);
+}
+
+// --- SETTINGS RESET & DIAGNOSTICS ---
+function resetSettings() {
+  const confirmed = confirm(
+    "Reset launcher settings to their defaults? Your accounts and Minecraft installations will not be deleted."
+  );
+  if (!confirmed) return;
+
+  settings = {
+    ram: "2",
+    updateChannel: "release",
+    javaPath: "java",
+    gameDir: "",
+    closeAfterLaunch: false
+  };
+  javaPath = "java";
+  gameDir = "";
+  closeAfterLaunch = false;
+
+  localStorage.setItem("auraSettings", JSON.stringify(settings));
+  localStorage.setItem("auraTheme", "dark");
+  localStorage.setItem("auraAccent", "#22c55e");
+
+  loadSettings();
+  showNotice("Settings restored to defaults", "success");
+  if (statusText) statusText.innerText = "Settings restored to defaults";
+}
+
+async function loadAboutInfo() {
+  try {
+    const info = await window.electron.ipcRenderer.invoke("get-app-info");
+    const version = document.getElementById("aboutVersion");
+    const build = document.getElementById("aboutBuildInfo");
+    if (version) version.innerText = "Version v" + info.version;
+    if (build) {
+      build.innerText = `${info.platform} (${info.architecture}) • Electron ${info.electron} • Chromium ${info.chromium}`;
+    }
+  } catch (error) {
+    const build = document.getElementById("aboutBuildInfo");
+    if (build) build.innerText = "Build information unavailable";
+    console.warn("Could not load application information:", error);
+  }
+}
+
+async function copyDiagnostics() {
+  try {
+    const info = await window.electron.ipcRenderer.invoke("get-app-info");
+    const report = [
+      "Aura Launcher Legacy Diagnostics",
+      `Version: ${info.version}`,
+      `Platform: ${info.platform}`,
+      `Architecture: ${info.architecture}`,
+      `Electron: ${info.electron}`,
+      `Chromium: ${info.chromium}`,
+      `Node.js: ${info.node}`,
+      `Packaged: ${info.packaged}`,
+      `Update channel: ${settings.updateChannel || "release"}`
+    ].join("\\n");
+
+    await window.electron.ipcRenderer.invoke("copy-diagnostics", report);
+    showNotice("Diagnostics copied to clipboard", "success");
+    if (statusText) statusText.innerText = "Diagnostics copied to clipboard";
+  } catch (error) {
+    console.error("Could not copy diagnostics:", error);
+    showNotice("Could not copy diagnostics", "error");
+    if (statusText) statusText.innerText = "Could not copy diagnostics";
+  }
+}
+
+async function copyErrorReport() {
+  try {
+    const info = await window.electron.ipcRenderer.invoke("get-app-info");
+    const error = lastLaunchError || {
+      code: "NO_RECENT_ERROR",
+      title: "No recent launch error",
+      message: "No launch error has been recorded in this session."
+    };
+    const report = [
+      "Aura Launcher Legacy — Error Report",
+      `Version: ${info.version}`,
+      `Platform: ${info.platform} (${info.architecture})`,
+      `Electron: ${info.electron}`,
+      `Chromium: ${info.chromium}`,
+      `Node.js: ${info.node}`,
+      `Packaged: ${info.packaged}`,
+      `Update channel: ${settings.updateChannel || "release"}`,
+      `Error code: ${error.code}`,
+      `Error: ${error.title}`,
+      `Details: ${error.message}`,
+      `Minecraft exit code: ${lastMinecraftExitCode === null ? "N/A" : lastMinecraftExitCode}`
+    ].join("\\n");
+
+    await window.electron.ipcRenderer.invoke("copy-diagnostics", report);
+    showNotice("Error report copied. It contains no account tokens or passwords.", "success");
+  } catch (error) {
+    console.error("Could not copy error report:", error);
+    showNotice("Could not copy error report", "error");
+  }
 }
 
 // --- CLIENT LOGIC ---
@@ -589,18 +746,27 @@ function changeTheme() {
   const theme = document.getElementById("theme").value;
   document.body.dataset.theme = theme;
   localStorage.setItem("auraTheme", theme);
+  showNotice(`${theme === "light" ? "Light" : "Dark"} theme applied`, "success");
 }
 
 function changeAccent() {
   const colour = document.getElementById("accentColor").value;
   document.documentElement.style.setProperty("--accent", colour);
   localStorage.setItem("auraAccent", colour);
+  showNotice("Accent color updated", "success");
 }
 
 async function checkForUpdates() {
-  const channel = settings.updateChannel || "release";
-  if(statusText) statusText.innerText = `Checking for ${channel} updates...`;
-  await window.electron.ipcRenderer.invoke("check-for-updates", channel);
+  const channel = settings.updateChannel === "beta" ? "beta" : "release";
+  if (statusText) statusText.innerText = `Checking for ${channel} updates...`;
+  showNotice(`Checking for ${channel} updates`, "info");
+  try {
+    await window.electron.ipcRenderer.invoke("check-for-updates", channel);
+  } catch (error) {
+    console.error("Manual update check failed:", error);
+    showNotice("Update check failed. Please try again later.", "error");
+    if (statusText) statusText.innerText = "Update check failed. Please try again later.";
+  }
 }
 
 // --- IPC LISTENERS ---
@@ -638,10 +804,28 @@ window.electron.ipcRenderer.on("launch-log", (message) => {
   }
 });
 
+window.electron.ipcRenderer.on("launch-error", (details) => {
+  lastLaunchError = {
+    code: String(details && details.code || "LAUNCH_FAILED"),
+    title: String(details && details.title || "Minecraft could not start"),
+    message: String(details && details.message || "Review the launcher console and try again.")
+  };
+  if (crashText) crashText.innerText = `${lastLaunchError.title}: ${lastLaunchError.message}`;
+  if (crashModal) crashModal.classList.remove("hidden");
+  showNotice(lastLaunchError.message, "error");
+});
+
 window.electron.ipcRenderer.on("minecraft-closed", (code) => {
+  lastMinecraftExitCode = Number(code);
   if (code !== 0 && crashModal) {
-    if(crashText) crashText.innerText = "Exit code: " + code;
+    lastLaunchError = {
+      code: "GAME_EXIT",
+      title: "Minecraft closed unexpectedly",
+      message: `Minecraft exited with code ${code}. Check the console for details.`
+    };
+    if(crashText) crashText.innerText = lastLaunchError.message;
     crashModal.classList.remove("hidden");
+    showNotice(lastLaunchError.message, "error");
   }
 });
 
@@ -674,6 +858,15 @@ window.electron.ipcRenderer.on("update-status", (message) => {
   const normalized = text.toLowerCase();
 
   if (statusText) statusText.innerText = text;
+  if (
+    normalized.includes("up to date") ||
+    normalized.includes("updates unavailable") ||
+    normalized.includes("update check failed") ||
+    normalized.includes("update ready")
+  ) {
+    const type = normalized.includes("unavailable") || normalized.includes("failed") ? "error" : "info";
+    showNotice(text, type);
+  }
 
   const isChecking = normalized.includes("checking for updates");
   const isDownloading = normalized.includes("downloading update") ||
@@ -701,7 +894,7 @@ window.electron.ipcRenderer.on("update-status", (message) => {
         if (!updateModalDismissed && updateModal && !updateModal.classList.contains("hidden")) {
           if (updateStatusText) {
             updateStatusText.innerText =
-              "Update check timed out. Aura Launcher will continue without an update.";
+              "Update check timed out. Aura Launcher Legacy will continue without an update.";
           }
           if (loader) loader.style.display = "none";
           if (progressTrack) progressTrack.style.display = "none";
@@ -751,6 +944,7 @@ window.electron.ipcRenderer.on("update-progress", (percent) => {
 // --- INIT ---
 normalizeStoredAccounts();
 loadSettings();
+loadAboutInfo();
 renderAccountUI();
 loadClients().catch(err => {
   console.error("Client load failed:", err);

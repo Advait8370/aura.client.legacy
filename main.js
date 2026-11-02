@@ -32,7 +32,7 @@ async function setActivity(details, state) {
       state,
       startTimestamp,
       largeImageKey: "aura_logo",
-      largeImageText: "Aura Launcher",
+      largeImageText: "Aura Launcher Legacy",
       instance: false
     });
   } catch (error) {
@@ -55,18 +55,50 @@ rpc.login({ clientId }).catch((error) => {
 
 let mainWindow = null;
 let splashWindow = null;
+let mainWindowReady = false;
+let startupUpdateResolved = false;
+let startupUpdateTimeout = null;
+let startupChannelFallbackTimeout = null;
+let startupUpdateStarted = false;
+let activeUpdateCheck = null;
+let lastUpdateStatus = "Starting Aura Launcher Legacy...";
+let lastUpdateProgress = null;
+
+function finishStartupUpdateCheck() {
+  startupUpdateResolved = true;
+  if (startupUpdateTimeout) {
+    clearTimeout(startupUpdateTimeout);
+    startupUpdateTimeout = null;
+  }
+  showMainWindowWhenReady();
+}
+
+function showMainWindowWhenReady() {
+  if (!mainWindowReady || !startupUpdateResolved) return;
+
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.close();
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
 
 function createWindow() {
   splashWindow = new BrowserWindow({
-    width: 320,
-    height: 420,
+    width: 540,
+    height: 520,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
     resizable: false,
+    center: true,
     webPreferences: {
       nodeIntegration: false,
-      contextIsolation: true
+      contextIsolation: true,
+      preload: path.join(__dirname, "preload.js")
     }
   });
 
@@ -93,16 +125,8 @@ function createWindow() {
   mainWindow.removeMenu();
 
   mainWindow.once("ready-to-show", () => {
-    setTimeout(() => {
-      if (splashWindow && !splashWindow.isDestroyed()) {
-        splashWindow.close();
-      }
-
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.show();
-        mainWindow.focus();
-      }
-    }, 1000);
+    mainWindowReady = true;
+    showMainWindowWhenReady();
   });
 
   mainWindow.on("closed", () => {
@@ -167,6 +191,31 @@ ipcMain.on("window-close", () => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.close();
   }
+});
+
+// ============================================================
+// APPLICATION INFORMATION & DIAGNOSTICS
+// ============================================================
+
+ipcMain.handle("get-app-info", () => ({
+  name: "Aura Launcher Legacy",
+  version: app.getVersion(),
+  electron: process.versions.electron,
+  chromium: process.versions.chrome,
+  node: process.versions.node,
+  platform: process.platform,
+  architecture: process.arch,
+  packaged: app.isPackaged
+}));
+
+ipcMain.handle("copy-diagnostics", async (_event, report) => {
+  if (typeof report !== "string" || report.length > 12000) {
+    throw new Error("Invalid diagnostics report.");
+  }
+
+  const { clipboard } = require("electron");
+  clipboard.writeText(report);
+  return true;
 });
 
 // ============================================================
@@ -382,6 +431,39 @@ ipcMain.handle("delete-client", async (event, data) => {
 });
 
 // ============================================================
+// LAUNCH ERROR CLASSIFICATION
+// ============================================================
+
+function classifyLaunchError(error) {
+  const raw = String(error && error.message ? error.message : error || "Unknown error");
+  const message = raw.toLowerCase();
+
+  if (/no minecraft client|no client selected|client not found/.test(message)) {
+    return { code: "CLIENT_SELECTION", title: "Select a Minecraft client", message: "Choose a valid client version and try again." };
+  }
+  if (/select an account|no account|login first/.test(message)) {
+    return { code: "ACCOUNT_REQUIRED", title: "Account required", message: "Add or select a Minecraft account before launching." };
+  }
+  if (/java|jre|jdk|unsupportedclassversion|could not create the java virtual machine/.test(message)) {
+    return { code: "JAVA_RUNTIME", title: "Java runtime problem", message: "Aura could not prepare or start Java. Check the Java path and required Java version." };
+  }
+  if (/enospc|no space left|disk full/.test(message)) {
+    return { code: "DISK_SPACE", title: "Not enough disk space", message: "Free up disk space and try again." };
+  }
+  if (/eacces|eperm|permission denied|access is denied/.test(message)) {
+    return { code: "FILE_PERMISSION", title: "File access denied", message: "Aura could not access a required file or folder. Check folder permissions." };
+  }
+  if (/enotfound|econn|network|fetch failed|timed out|http \d{3}/.test(message)) {
+    return { code: "NETWORK", title: "Network or download problem", message: "Check your internet connection and try again." };
+  }
+  if (/zip|extract|archive|profile was not found/.test(message)) {
+    return { code: "CLIENT_FILES", title: "Client files are invalid", message: "The client download may be incomplete or incorrectly packaged. Try repairing the client." };
+  }
+
+  return { code: "LAUNCH_FAILED", title: "Minecraft could not start", message: "Review the launcher console, then try repairing the client or checking your Java settings." };
+}
+
+// ============================================================
 // MINECRAFT LAUNCHING
 // ============================================================
 
@@ -490,7 +572,13 @@ ipcMain.on("launch-game", async (event, data) => {
   } catch (error) {
     console.error("Minecraft launch failed:", error);
 
-    send("launch-status", "Launch failed. Check the console for details.");
+    const classified = classifyLaunchError(error);
+    send("launch-status", classified.title);
+    send("launch-error", {
+      code: classified.code,
+      title: classified.title,
+      message: classified.message
+    });
     send(
       "launch-log",
       error && error.stack ? error.stack : String(error)
@@ -504,46 +592,111 @@ ipcMain.on("launch-game", async (event, data) => {
 // AUTO UPDATER
 // ============================================================
 
+function normalizeUpdateChannel(channel) {
+  return channel === "beta" ? "beta" : "release";
+}
+
+function startStartupUpdateCheck(channel) {
+  if (startupUpdateStarted) return;
+  startupUpdateStarted = true;
+
+  if (startupChannelFallbackTimeout) {
+    clearTimeout(startupChannelFallbackTimeout);
+    startupChannelFallbackTimeout = null;
+  }
+
+  if (!app.isPackaged) {
+    sendToRenderer("update-status", "Starting Aura Launcher Legacy...");
+    finishStartupUpdateCheck();
+    return;
+  }
+
+  autoUpdater.allowPrerelease = normalizeUpdateChannel(channel) === "beta";
+  autoUpdater.allowDowngrade = false;
+
+  sendToRenderer("update-status", "Checking for updates...");
+  startupUpdateTimeout = setTimeout(() => {
+    sendToRenderer(
+      "update-status",
+      "Update check is taking too long. Starting launcher..."
+    );
+    finishStartupUpdateCheck();
+  }, 25000);
+
+  runUpdateCheck(channel).catch((error) => {
+    console.warn("Automatic update check failed:", error.message);
+    sendToRenderer(
+      "update-status",
+      "Updates unavailable. Starting Aura Launcher Legacy..."
+    );
+    finishStartupUpdateCheck();
+  });
+}
+
+async function runUpdateCheck(channel) {
+  if (!app.isPackaged) {
+    return { skipped: true, reason: "development-build" };
+  }
+
+  autoUpdater.allowPrerelease = normalizeUpdateChannel(channel) === "beta";
+  autoUpdater.allowDowngrade = false;
+
+  if (activeUpdateCheck) return activeUpdateCheck;
+
+  activeUpdateCheck = autoUpdater.checkForUpdates();
+  try {
+    return await activeUpdateCheck;
+  } finally {
+    activeUpdateCheck = null;
+  }
+}
+
+ipcMain.handle("set-update-channel", (_event, channel) => {
+  const normalized = normalizeUpdateChannel(channel);
+  if (!startupUpdateStarted) {
+    startStartupUpdateCheck(normalized);
+  } else {
+    autoUpdater.allowPrerelease = normalized === "beta";
+  }
+  return normalized;
+});
+
 ipcMain.handle("check-for-updates", async (_event, channel) => {
   if (!app.isPackaged) {
     sendToRenderer(
       "update-status",
       "Automatic updates are available in packaged releases only."
     );
-
-    return {
-      skipped: true,
-      reason: "development-build"
-    };
+    return { skipped: true, reason: "development-build" };
   }
 
-  autoUpdater.allowPrerelease = channel === "beta";
-
   try {
-    return await autoUpdater.checkForUpdates();
+    return await runUpdateCheck(channel);
   } catch (error) {
     console.error("Manual update check failed:", error);
-
     sendToRenderer(
       "update-status",
-      "Updates are currently unavailable. You can continue using Aura Launcher."
+      "Updates are currently unavailable. You can continue using Aura Launcher Legacy."
     );
-
-    return {
-      skipped: true,
-      reason: "update-check-failed"
-    };
+    return { skipped: true, reason: "update-check-failed" };
   }
 });
 
 function setupAutoUpdater() {
   autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on("checking-for-update", () => {
     sendToRenderer("update-status", "Checking for updates...");
   });
 
   autoUpdater.on("update-available", (info) => {
+    // The update check has succeeded; keep the splash up for the download.
+    if (startupUpdateTimeout) {
+      clearTimeout(startupUpdateTimeout);
+      startupUpdateTimeout = null;
+    }
+
     sendToRenderer(
       "update-status",
       `Downloading update ${info.version}...`
@@ -551,14 +704,21 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on("update-not-available", () => {
-    sendToRenderer("update-status", "Aura Launcher is up to date.");
+    sendToRenderer("update-status", "Aura Launcher Legacy is up to date.");
+    finishStartupUpdateCheck();
   });
 
   autoUpdater.on("download-progress", (progress) => {
-    sendToRenderer("update-progress", progress.percent);
+    const percent = Math.max(0, Math.min(100, Number(progress.percent) || 0));
+    sendToRenderer("update-progress", percent);
   });
 
   autoUpdater.on("update-downloaded", () => {
+    if (startupUpdateTimeout) {
+      clearTimeout(startupUpdateTimeout);
+      startupUpdateTimeout = null;
+    }
+
     sendToRenderer(
       "update-status",
       "Update ready. Restarting launcher..."
@@ -566,31 +726,47 @@ function setupAutoUpdater() {
 
     setTimeout(() => {
       if (app.isPackaged) {
-        autoUpdater.quitAndInstall();
+        autoUpdater.quitAndInstall(false, true);
       }
-    }, 3000);
+    }, 2500);
   });
 
   autoUpdater.on("error", (error) => {
-    // Detailed diagnostics stay in the developer console.
-    // Do not expose HTTP response headers in the sidebar.
-    console.error("Aura Launcher updater error:", error);
+    console.error("Aura Launcher Legacy updater error:", error);
+
+    if (startupUpdateTimeout) {
+      clearTimeout(startupUpdateTimeout);
+      startupUpdateTimeout = null;
+    }
 
     sendToRenderer(
       "update-status",
-      "Updates unavailable. You can continue using Aura Launcher."
+      "Updates unavailable. Starting Aura Launcher Legacy..."
     );
+    finishStartupUpdateCheck();
   });
 }
 
 function sendToRenderer(channel, data) {
+  if (channel === "update-status") {
+    lastUpdateStatus = String(data || "");
+  } else if (channel === "update-progress") {
+    lastUpdateProgress = data;
+  }
+
+  const targetWindow =
+    splashWindow && !splashWindow.isDestroyed()
+      ? splashWindow
+      : mainWindow;
+
   if (
-    mainWindow &&
-    !mainWindow.isDestroyed() &&
-    mainWindow.webContents &&
-    !mainWindow.webContents.isDestroyed()
+    targetWindow &&
+    !targetWindow.isDestroyed() &&
+    targetWindow.webContents &&
+    !targetWindow.webContents.isDestroyed() &&
+    !targetWindow.webContents.isLoadingMainFrame()
   ) {
-    mainWindow.webContents.send(channel, data);
+    targetWindow.webContents.send(channel, data);
   }
 }
 
@@ -602,14 +778,24 @@ app.whenReady().then(() => {
   setupAutoUpdater();
   createWindow();
 
-  // Never request latest.yml while running `npm start`.
-  // Packaged releases still require a valid release feed.
-  if (app.isPackaged) {
-    autoUpdater.checkForUpdates().catch((error) => {
-      console.warn(
-        "Automatic update check failed:",
-        error.message
-      );
+  if (!app.isPackaged) {
+    sendToRenderer("update-status", "Starting Aura Launcher Legacy...");
+    finishStartupUpdateCheck();
+    return;
+  }
+
+  // Let the renderer provide the saved update channel. Fall back to stable
+  // if the renderer does not initialize within the grace period.
+  startupChannelFallbackTimeout = setTimeout(() => {
+    startStartupUpdateCheck("release");
+  }, 10000);
+
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.webContents.once("did-finish-load", () => {
+      sendToRenderer("update-status", lastUpdateStatus);
+      if (lastUpdateProgress !== null) {
+        sendToRenderer("update-progress", lastUpdateProgress);
+      }
     });
   }
 });
