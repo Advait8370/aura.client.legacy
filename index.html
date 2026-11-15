@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Aura Launcher</title>
+  <title>Aura Launcher Legacy</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -10,7 +10,7 @@
 <!-- TITLEBAR -->
 <div class="titlebar">
   <div class="titlebar-drag-region">
-    <span class="titlebar-title">Aura Launcher</span>
+    <span class="titlebar-title">Aura Launcher Legacy</span>
   </div>
   <div class="titlebar-controls">
     <button onclick="window.electron.ipcRenderer.send('window-minimize')">—</button>
@@ -29,7 +29,7 @@
       <div class="logo-box">A</div>
       <div>
         <h1>Aura</h1>
-        <p>Client Launcher</p>
+        <p>LEGACY EDITION</p>
       </div>
     </div>
 
@@ -70,17 +70,25 @@
       <header class="topbar">
         <div>
           <h2>Dashboard</h2>
-          <p>Fast cloud Minecraft client launcher</p>
+          <p>Your Minecraft clients, profiles, and Java runtimes in one place.</p>
         </div>
         <button class="dark-btn small" onclick="selectJava()">Java Path</button>
       </header>
 
       <section class="banner">
         <div>
-          <span>AURA CLIENT</span>
+          <span>LEGACY EDITION</span>
           <h3>Ready to Play?</h3>
           <p>Select your client version below and hit PLAY to launch Minecraft instantly.</p>
         </div>
+      </section>
+
+      <section class="card" id="recentCard" style="margin-bottom:18px;">
+        <div class="topbar" style="margin-bottom:10px;">
+          <div><h3>Recently Played</h3><p class="muted">Quickly return to your last client.</p></div>
+          <button class="dark-btn small" onclick="launchRecentClient()">Quick Launch</button>
+        </div>
+        <div id="recentClients" class="recent-clients"><span class="muted">Your recently launched clients will appear here.</span></div>
       </section>
 
       <section class="panel-grid">
@@ -98,6 +106,7 @@
           <p id="downloadPercent">0%</p>
 
           <button class="play-btn" onclick="play()">PLAY</button>
+          <button class="dark-btn full-btn" onclick="retryClientDownload()">Retry / Install Client</button>
         </div>
 
         <div class="card console-card">
@@ -107,6 +116,21 @@
           </div>
           <textarea id="console" readonly placeholder="Launcher output will stream here..."></textarea>
         </div>
+      </section>
+
+      <section class="card" style="margin-top:18px;">
+        <div class="topbar" style="margin-bottom:12px;">
+          <div><h3>Game Profile</h3><p class="muted">Customize launch settings for the selected client.</p></div>
+          <button class="play-btn small" onclick="saveClientProfile()">Save Profile</button>
+        </div>
+        <div class="profile-grid">
+          <div><label>Profile Name</label><input id="profileName" placeholder="Default profile"></div>
+          <div><label>Memory (RAM)</label><input id="profileRam" type="number" min="1" max="16" value="2"></div>
+          <div><label>Java Executable</label><div class="inline-input"><input id="profileJava" placeholder="Use automatic Java"><button class="dark-btn" onclick="browseProfileJava()">Browse</button></div></div>
+          <div><label>Game Directory</label><div class="inline-input"><input id="profileGameDir" placeholder="Use launcher default"><button class="dark-btn" onclick="browseProfileGameDir()">Browse</button></div></div>
+          <div><label>Custom JVM Arguments</label><input id="profileJvmArgs" placeholder="-XX:+UseG1GC"></div>
+        </div>
+        <p class="muted" style="font-size:12px;margin-top:10px;">Profiles are stored locally per client. Advanced JVM arguments are saved with the profile; they are passed to the launcher only if supported by the installed launch library.</p>
       </section>
     </section>
 
@@ -219,15 +243,17 @@
         <select id="accentColor" onchange="changeAccent()">
           <option value="#22c55e">Emerald Green</option>
           <option value="#3b82f6">Ocean Blue</option>
-          <option value="#a855f7">Royal Purple</option>
+          <option value="#a855f7" selected>Royal Purple</option>
           <option value="#ef4444">Crimson Red</option>
         </select>
 
         <label>Custom Java Binary</label>
         <div style="display:flex; gap:10px;">
-          <input id="javaPathInput" readonly placeholder="Default: java">
+          <input id="javaPathInput" readonly placeholder="Default: automatic Java selection">
           <button class="dark-btn" onclick="selectJava()">Browse</button>
+          <button class="dark-btn" onclick="detectJava()">Detect Java</button>
         </div>
+        <p id="javaDetectionStatus" class="muted" style="font-size:12px;margin-top:6px;">Java detection checks the system runtime and reports its version.</p>
 
         <label>Game Directory</label>
         <div style="display:flex; gap:10px;">
@@ -243,6 +269,8 @@
         </div>
 
         <button class="dark-btn full-btn" onclick="checkForUpdates()">Check For Launcher Updates</button>
+        <button class="dark-btn full-btn" onclick="resetSettings()">Reset Settings</button>
+        <p class="muted" style="font-size:12px; margin-top:8px;">Reset restores launcher preferences only. Accounts and Minecraft files are not deleted.</p>
       </div>
     </section>
 
@@ -275,10 +303,13 @@
       <section class="panel-grid">
         <div class="card" style="text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 24px;">
           <div class="logo-box" style="width: 80px; height: 80px; font-size: 40px; margin-bottom: 16px; box-shadow: 0 15px 35px var(--accent-glow);">A</div>
-          <h2 style="margin-bottom: 4px;">Aura Launcher</h2>
-          <p style="margin-bottom: 24px; font-weight: bold; color: var(--accent);">Version 2.0.0-beta.1</p>
+          <h2 style="margin-bottom: 4px;">Aura Launcher Legacy</h2>
+          <p id="aboutVersion" style="margin-bottom: 12px; font-weight: bold; color: var(--accent);">Version v2.0.2</p>
+          <p id="aboutBuildInfo" class="muted" style="margin-bottom: 18px; font-size:12px;">Loading build information...</p>
+          <p class="about-note">A lightweight launcher for managing and starting Minecraft clients.</p>
+          <button class="dark-btn" onclick="copyDiagnostics()" style="width:80%; margin-bottom:10px;">Copy Diagnostics</button>
           
-          <button class="dark-btn" onclick="window.electron.ipcRenderer.invoke('open-external', 'https://github.com/Advait8370/aura-client')" style="width: 80%;">
+          <button class="dark-btn" onclick="window.electron.ipcRenderer.invoke('open-external', 'https://github.com/Advait8370/aura.client.legacy')" style="width: 80%;">
             View on GitHub
           </button>
         </div>
@@ -324,7 +355,10 @@
     <h2 style="color:var(--danger);">Minecraft Crashed</h2>
     <p id="crashText">Exit Code: Unknown</p>
     <textarea id="crashLog" readonly></textarea>
-    <button class="danger-btn full-btn" onclick="closeCrashModal()">Dismiss</button>
+    <div class="button-row">
+      <button class="dark-btn" onclick="copyErrorReport()">Copy Error Report</button>
+      <button class="danger-btn" onclick="closeCrashModal()">Dismiss</button>
+    </div>
   </div>
 </div>
 

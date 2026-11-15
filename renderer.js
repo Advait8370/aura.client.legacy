@@ -79,10 +79,31 @@ const updateProgressText = document.getElementById("updateProgressText");
 // --- STATE ---
 let clientsCache = [];
 let currentAccount = readCurrentAccount();
-let settings = JSON.parse(localStorage.getItem("auraSettings") || "{}");
+function readStoredSettings() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem("auraSettings") || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    console.warn("Saved settings could not be read; using defaults.", error);
+    return {};
+  }
+}
+
+let settings = readStoredSettings();
 let javaPath = settings.javaPath || "java";
 let gameDir = settings.gameDir || "";
 let closeAfterLaunch = settings.closeAfterLaunch || false;
+let clientProfiles = readClientProfiles();
+let recentClients = readRecentClients();
+
+function readClientProfiles() {
+  try { return JSON.parse(localStorage.getItem("auraClientProfiles") || "{}") || {}; }
+  catch { return {}; }
+}
+function readRecentClients() {
+  try { return JSON.parse(localStorage.getItem("auraRecentClients") || "[]") || []; }
+  catch { return []; }
+}
 
 // --- ACCOUNT LOGIC ---
 function readAccounts() {
@@ -264,17 +285,31 @@ function updateRamReadout() {
 }
 
 function saveSettings() {
+  const ramInput = document.getElementById("ram");
+  const requestedRam = Number(ramInput ? ramInput.value : 2);
+  const safeRam = Math.min(16, Math.max(1, Number.isFinite(requestedRam) ? Math.round(requestedRam) : 2));
+
+  if (ramInput) ramInput.value = String(safeRam);
+
   settings = {
-    ram: document.getElementById("ram").value,
-    updateChannel: document.getElementById("updateChannel") ? document.getElementById("updateChannel").value : "release",
-    javaPath,
-    gameDir,
-    closeAfterLaunch: closeAfterLaunchInput.checked
+    ram: String(safeRam),
+    updateChannel: document.getElementById("updateChannel")
+      ? (document.getElementById("updateChannel").value === "beta" ? "beta" : "release")
+      : "release",
+    javaPath: typeof javaPath === "string" ? javaPath : "java",
+    gameDir: typeof gameDir === "string" ? gameDir : "",
+    closeAfterLaunch: Boolean(closeAfterLaunchInput && closeAfterLaunchInput.checked)
   };
 
   closeAfterLaunch = settings.closeAfterLaunch;
   localStorage.setItem("auraSettings", JSON.stringify(settings));
-  if(statusText) statusText.innerText = "Settings saved";
+  updateRamReadout();
+  window.electron.ipcRenderer.invoke(
+    "set-update-channel",
+    settings.updateChannel
+  ).catch((error) => console.warn("Could not sync update channel:", error));
+  showNotice("Settings saved", "success");
+  if (statusText) statusText.innerText = "Settings saved";
 }
 
 function loadSettings() {
@@ -282,15 +317,18 @@ function loadSettings() {
   const updateChannelSelect = document.getElementById("updateChannel");
   const themeSelect = document.getElementById("theme");
   const accentSelect = document.getElementById("accentColor");
-  const savedTheme = localStorage.getItem("auraTheme") || "dark";
-  const savedAccent = localStorage.getItem("auraAccent") || "#22c55e";
+  const savedTheme = localStorage.getItem("auraTheme") === "light" ? "light" : "dark";
+  const allowedAccents = ["#22c55e", "#3b82f6", "#a855f7", "#ef4444"];
+  const storedAccent = localStorage.getItem("auraAccent") || "#22c55e";
+  const savedAccent = allowedAccents.includes(storedAccent) ? storedAccent : "#22c55e";
 
   document.body.dataset.theme = savedTheme;
   document.documentElement.style.setProperty("--accent", savedAccent);
 
   if (ramSlider) {
-    ramSlider.value = settings.ram || "2";
-    updateRamReadout(); // Set the initial text on boot
+    const savedRam = Number(settings.ram);
+    ramSlider.value = String(Math.min(16, Math.max(1, Number.isFinite(savedRam) && savedRam > 0 ? Math.round(savedRam) : 2)));
+    updateRamReadout();
   }
   if (updateChannelSelect) updateChannelSelect.value = settings.updateChannel || "release";
   if (themeSelect) themeSelect.value = savedTheme;
@@ -298,6 +336,136 @@ function loadSettings() {
   if (javaPathInput) javaPathInput.value = javaPath === "java" ? "" : javaPath;
   if (gameDirInput) gameDirInput.value = gameDir || "";
   if (closeAfterLaunchInput) closeAfterLaunchInput.checked = closeAfterLaunch;
+
+  window.electron.ipcRenderer.invoke(
+    "set-update-channel",
+    settings.updateChannel === "beta" ? "beta" : "release"
+  ).catch((error) => {
+    console.warn("Could not sync update channel:", error);
+  });
+}
+
+// --- LIGHTWEIGHT IN-APP NOTIFICATIONS ---
+let noticeTimer = null;
+let lastLaunchError = null;
+let lastMinecraftExitCode = null;
+
+function showNotice(message, type = "info") {
+  let notice = document.getElementById("auraNotice");
+  if (!notice) {
+    notice = document.createElement("div");
+    notice.id = "auraNotice";
+    notice.className = "aura-notice";
+    notice.setAttribute("role", "status");
+    notice.setAttribute("aria-live", "polite");
+    document.body.appendChild(notice);
+  }
+
+  notice.textContent = String(message || "");
+  notice.dataset.type = ["success", "error", "info"].includes(type) ? type : "info";
+  notice.classList.add("visible");
+
+  if (noticeTimer) clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => notice.classList.remove("visible"), 2800);
+}
+
+// --- SETTINGS RESET & DIAGNOSTICS ---
+function resetSettings() {
+  const confirmed = confirm(
+    "Reset launcher settings to their defaults? Your accounts and Minecraft installations will not be deleted."
+  );
+  if (!confirmed) return;
+
+  settings = {
+    ram: "2",
+    updateChannel: "release",
+    javaPath: "java",
+    gameDir: "",
+    closeAfterLaunch: false
+  };
+  javaPath = "java";
+  gameDir = "";
+  closeAfterLaunch = false;
+
+  localStorage.setItem("auraSettings", JSON.stringify(settings));
+  localStorage.setItem("auraTheme", "dark");
+  localStorage.setItem("auraAccent", "#22c55e");
+
+  loadSettings();
+  showNotice("Settings restored to defaults", "success");
+  if (statusText) statusText.innerText = "Settings restored to defaults";
+}
+
+async function loadAboutInfo() {
+  try {
+    const info = await window.electron.ipcRenderer.invoke("get-app-info");
+    const version = document.getElementById("aboutVersion");
+    const build = document.getElementById("aboutBuildInfo");
+    if (version) version.innerText = "Version v" + info.version;
+    if (build) {
+      build.innerText = `${info.platform} (${info.architecture}) • Electron ${info.electron} • Chromium ${info.chromium}`;
+    }
+  } catch (error) {
+    const build = document.getElementById("aboutBuildInfo");
+    if (build) build.innerText = "Build information unavailable";
+    console.warn("Could not load application information:", error);
+  }
+}
+
+async function copyDiagnostics() {
+  try {
+    const info = await window.electron.ipcRenderer.invoke("get-app-info");
+    const report = [
+      "Aura Launcher Legacy Diagnostics",
+      `Version: ${info.version}`,
+      `Platform: ${info.platform}`,
+      `Architecture: ${info.architecture}`,
+      `Electron: ${info.electron}`,
+      `Chromium: ${info.chromium}`,
+      `Node.js: ${info.node}`,
+      `Packaged: ${info.packaged}`,
+      `Update channel: ${settings.updateChannel || "release"}`
+    ].join("\\n");
+
+    await window.electron.ipcRenderer.invoke("copy-diagnostics", report);
+    showNotice("Diagnostics copied to clipboard", "success");
+    if (statusText) statusText.innerText = "Diagnostics copied to clipboard";
+  } catch (error) {
+    console.error("Could not copy diagnostics:", error);
+    showNotice("Could not copy diagnostics", "error");
+    if (statusText) statusText.innerText = "Could not copy diagnostics";
+  }
+}
+
+async function copyErrorReport() {
+  try {
+    const info = await window.electron.ipcRenderer.invoke("get-app-info");
+    const error = lastLaunchError || {
+      code: "NO_RECENT_ERROR",
+      title: "No recent launch error",
+      message: "No launch error has been recorded in this session."
+    };
+    const report = [
+      "Aura Launcher Legacy — Error Report",
+      `Version: ${info.version}`,
+      `Platform: ${info.platform} (${info.architecture})`,
+      `Electron: ${info.electron}`,
+      `Chromium: ${info.chromium}`,
+      `Node.js: ${info.node}`,
+      `Packaged: ${info.packaged}`,
+      `Update channel: ${settings.updateChannel || "release"}`,
+      `Error code: ${error.code}`,
+      `Error: ${error.title}`,
+      `Details: ${error.message}`,
+      `Minecraft exit code: ${lastMinecraftExitCode === null ? "N/A" : lastMinecraftExitCode}`
+    ].join("\\n");
+
+    await window.electron.ipcRenderer.invoke("copy-diagnostics", report);
+    showNotice("Error report copied. It contains no account tokens or passwords.", "success");
+  } catch (error) {
+    console.error("Could not copy error report:", error);
+    showNotice("Could not copy error report", "error");
+  }
 }
 
 // --- CLIENT LOGIC ---
@@ -320,16 +488,139 @@ async function loadClients() {
     });
 
     if (clientsCache.length > 0) {
-      if(clientSelect) clientSelect.value = clientsCache[0].id;
-      if(clientManagerSelect) clientManagerSelect.value = clientsCache[0].id;
+      const preferred = settings.lastClientId && clientsCache.some(c => c.id === settings.lastClientId)
+        ? settings.lastClientId : clientsCache[0].id;
+      if(clientSelect) clientSelect.value = preferred;
+      if(clientManagerSelect) clientManagerSelect.value = preferred;
     }
 
+    renderRecentClients();
+    loadClientProfile();
     await checkSelectedClient();
     await checkManagerClient();
   } catch (err) {
     if(statusText) statusText.innerText = "Failed to load clients";
     console.error(err);
     if(consoleBox) consoleBox.value += err.message + "\n";
+  }
+}
+
+function currentProfileClientId() {
+  return clientSelect ? clientSelect.value : "";
+}
+
+function loadClientProfile() {
+  const id = currentProfileClientId();
+  const profile = clientProfiles[id] || {};
+  const set = (elementId, value) => { const el = document.getElementById(elementId); if (el) el.value = value ?? ""; };
+  set("profileName", profile.name || (clientsCache.find(c => c.id === id)?.name || "Default profile"));
+  set("profileRam", profile.ram || settings.ram || "2");
+  set("profileJava", profile.javaPath || "");
+  set("profileGameDir", profile.gameDir || "");
+  set("profileJvmArgs", profile.jvmArgs || "");
+}
+
+function saveClientProfile() {
+  const id = currentProfileClientId();
+  if (!id) return showNotice("Select a client before saving its profile.", "error");
+  const ram = Math.max(1, Math.min(16, Number(document.getElementById("profileRam")?.value) || 2));
+  clientProfiles[id] = {
+    name: document.getElementById("profileName")?.value.trim() || "Default profile",
+    ram: String(ram),
+    javaPath: document.getElementById("profileJava")?.value.trim() || "",
+    gameDir: document.getElementById("profileGameDir")?.value.trim() || "",
+    jvmArgs: document.getElementById("profileJvmArgs")?.value.trim() || ""
+  };
+  localStorage.setItem("auraClientProfiles", JSON.stringify(clientProfiles));
+  showNotice("Game profile saved", "success");
+}
+
+async function browseProfileJava() {
+  const selected = await window.electron.ipcRenderer.invoke("select-java");
+  if (selected) document.getElementById("profileJava").value = selected;
+}
+
+async function browseProfileGameDir() {
+  const selected = await window.electron.ipcRenderer.invoke("select-game-dir");
+  if (selected) document.getElementById("profileGameDir").value = selected;
+}
+
+function recordRecentClient(clientId) {
+  const client = clientsCache.find(c => c.id === clientId);
+  if (!client) return;
+  recentClients = [{ id: client.id, name: client.name, playedAt: Date.now() }, ...recentClients.filter(c => c.id !== client.id)].slice(0, 5);
+  localStorage.setItem("auraRecentClients", JSON.stringify(recentClients));
+  settings.lastClientId = clientId;
+  localStorage.setItem("auraSettings", JSON.stringify(settings));
+  renderRecentClients();
+}
+
+function renderRecentClients() {
+  const container = document.getElementById("recentClients");
+  if (!container) return;
+  container.innerHTML = "";
+  const valid = recentClients.filter(r => clientsCache.some(c => c.id === r.id));
+  if (!valid.length) {
+    container.innerHTML = '<span class="muted">Your recently launched clients will appear here.</span>';
+    return;
+  }
+  valid.forEach(item => {
+    const button = document.createElement("button");
+    button.className = "recent-client";
+    button.type = "button";
+    const when = item.playedAt ? new Date(item.playedAt).toLocaleString() : "Played recently";
+    button.innerHTML = `<span>🎮</span><span><b></b><small></small></span>`;
+    button.querySelector("b").textContent = item.name;
+    button.querySelector("small").textContent = when;
+    button.addEventListener("click", () => {
+      if (clientSelect) clientSelect.value = item.id;
+      if (clientManagerSelect) clientManagerSelect.value = item.id;
+      loadClientProfile();
+      checkSelectedClient();
+      checkManagerClient();
+    });
+    container.appendChild(button);
+  });
+}
+
+function launchRecentClient() {
+  const recent = recentClients[0];
+  if (!recent || !clientSelect) return showNotice("No recently played client yet.", "info");
+  clientSelect.value = recent.id;
+  loadClientProfile();
+  play();
+}
+
+async function retryClientDownload() {
+  const id = clientSelect?.value;
+  if (!id) return showNotice("Select a client first.", "error");
+  resetProgress();
+  if (installState) installState.innerText = "Retrying download...";
+  try {
+    await window.electron.ipcRenderer.invoke("install-client", { client: id, gameDir: clientProfiles[id]?.gameDir || gameDir });
+    await checkSelectedClient();
+    await checkManagerClient();
+    showNotice("Client installation completed", "success");
+  } catch (error) {
+    showNotice(`Download failed: ${error.message}`, "error");
+  }
+}
+
+async function detectJava() {
+  const status = document.getElementById("javaDetectionStatus");
+  if (status) status.textContent = "Detecting Java...";
+  try {
+    const result = await window.electron.ipcRenderer.invoke("detect-java");
+    if (result?.path) {
+      javaPath = result.path;
+      if (javaPathInput) javaPathInput.value = result.path;
+      if (status) status.textContent = `Detected Java ${result.version}: ${result.path}`;
+      saveSettings();
+    } else {
+      if (status) status.textContent = "No Java runtime detected. Aura can download a compatible managed runtime when you launch.";
+    }
+  } catch (error) {
+    if (status) status.textContent = `Java detection failed: ${error.message}`;
   }
 }
 
@@ -387,6 +678,7 @@ async function selectGameDir() {
 
 async function checkSelectedClient() {
   if (!clientSelect || !clientSelect.value) return;
+  loadClientProfile();
 
   // --- DYNAMIC BACKGROUND LOGIC ---
   const clientId = clientSelect.value.toLowerCase();
@@ -524,6 +816,10 @@ async function play() {
     return;
   }
 
+  const profile = clientProfiles[clientId] || {};
+  const launchRam = profile.ram || (document.getElementById("ram") ? document.getElementById("ram").value : "2");
+  const launchJava = profile.javaPath || javaPath;
+  const launchGameDir = profile.gameDir || gameDir;
   resetProgress();
   if(consoleBox) consoleBox.value = "";
   if(launchLog) launchLog.value = "";
@@ -536,7 +832,7 @@ async function play() {
 
     const installed = await window.electron.ipcRenderer.invoke("check-client", {
       client: clientId,
-      gameDir
+      gameDir: launchGameDir
     });
 
     if (!installed) {
@@ -545,7 +841,7 @@ async function play() {
 
       await window.electron.ipcRenderer.invoke("install-client", {
         client: clientId,
-        gameDir
+        gameDir: launchGameDir
       });
 
       await checkSelectedClient();
@@ -555,6 +851,7 @@ async function play() {
     if(logStatus) logStatus.innerText = "Launching Minecraft...";
     if(statusText) statusText.innerText = "Launching Minecraft...";
 
+    recordRecentClient(clientId);
     window.electron.ipcRenderer.send("launch-game", {
       client: clientId,
       accountType: currentAccount.type,
@@ -562,9 +859,10 @@ async function play() {
       uuid: currentAccount.uuid,
       accessToken: currentAccount.accessToken,
       clientToken: currentAccount.clientToken,
-      ram: document.getElementById("ram") ? document.getElementById("ram").value : "2",
-      javaPath,
-      gameDir,
+      ram: launchRam,
+      javaPath: launchJava,
+      gameDir: launchGameDir,
+      jvmArgs: profile.jvmArgs || "",
       closeAfterLaunch: closeAfterLaunchInput ? closeAfterLaunchInput.checked : false
     });
   } catch (err) {
@@ -589,18 +887,27 @@ function changeTheme() {
   const theme = document.getElementById("theme").value;
   document.body.dataset.theme = theme;
   localStorage.setItem("auraTheme", theme);
+  showNotice(`${theme === "light" ? "Light" : "Dark"} theme applied`, "success");
 }
 
 function changeAccent() {
   const colour = document.getElementById("accentColor").value;
   document.documentElement.style.setProperty("--accent", colour);
   localStorage.setItem("auraAccent", colour);
+  showNotice("Accent color updated", "success");
 }
 
 async function checkForUpdates() {
-  const channel = settings.updateChannel || "release";
-  if(statusText) statusText.innerText = `Checking for ${channel} updates...`;
-  await window.electron.ipcRenderer.invoke("check-for-updates", channel);
+  const channel = settings.updateChannel === "beta" ? "beta" : "release";
+  if (statusText) statusText.innerText = `Checking for ${channel} updates...`;
+  showNotice(`Checking for ${channel} updates`, "info");
+  try {
+    await window.electron.ipcRenderer.invoke("check-for-updates", channel);
+  } catch (error) {
+    console.error("Manual update check failed:", error);
+    showNotice("Update check failed. Please try again later.", "error");
+    if (statusText) statusText.innerText = "Update check failed. Please try again later.";
+  }
 }
 
 // --- IPC LISTENERS ---
@@ -610,8 +917,12 @@ window.electron.ipcRenderer.on("download-progress", (data) => {
 
   if(downloadProgress) downloadProgress.style.width = percent + "%";
   if(managerProgress) managerProgress.style.width = percent + "%";
-  if(downloadPercent) downloadPercent.innerText = `${percent}% • ${payload.speed?.toFixed(2) || 0} MB/s`;
-  if(managerPercent) managerPercent.innerText = `${percent}% • ETA ${Math.round(payload.eta || 0)}s`;
+  const speed = Number(payload.speed) || 0;
+  const eta = Number(payload.eta) || 0;
+  const speedText = speed > 0 ? ` • ${speed.toFixed(2)} MB/s` : "";
+  const etaText = eta > 0 ? ` • ETA ${Math.ceil(eta)}s` : "";
+  if(downloadPercent) downloadPercent.innerText = `${percent}%${speedText}${etaText}`;
+  if(managerPercent) managerPercent.innerText = `${percent}%${speedText}${etaText}`;
 });
 
 window.electron.ipcRenderer.on("launch-status", (message) => {
@@ -638,10 +949,28 @@ window.electron.ipcRenderer.on("launch-log", (message) => {
   }
 });
 
+window.electron.ipcRenderer.on("launch-error", (details) => {
+  lastLaunchError = {
+    code: String(details && details.code || "LAUNCH_FAILED"),
+    title: String(details && details.title || "Minecraft could not start"),
+    message: String(details && details.message || "Review the launcher console and try again.")
+  };
+  if (crashText) crashText.innerText = `${lastLaunchError.title}: ${lastLaunchError.message}`;
+  if (crashModal) crashModal.classList.remove("hidden");
+  showNotice(lastLaunchError.message, "error");
+});
+
 window.electron.ipcRenderer.on("minecraft-closed", (code) => {
+  lastMinecraftExitCode = Number(code);
   if (code !== 0 && crashModal) {
-    if(crashText) crashText.innerText = "Exit code: " + code;
+    lastLaunchError = {
+      code: "GAME_EXIT",
+      title: "Minecraft closed unexpectedly",
+      message: `Minecraft exited with code ${code}. Check the console for details.`
+    };
+    if(crashText) crashText.innerText = lastLaunchError.message;
     crashModal.classList.remove("hidden");
+    showNotice(lastLaunchError.message, "error");
   }
 });
 
@@ -674,6 +1003,15 @@ window.electron.ipcRenderer.on("update-status", (message) => {
   const normalized = text.toLowerCase();
 
   if (statusText) statusText.innerText = text;
+  if (
+    normalized.includes("up to date") ||
+    normalized.includes("updates unavailable") ||
+    normalized.includes("update check failed") ||
+    normalized.includes("update ready")
+  ) {
+    const type = normalized.includes("unavailable") || normalized.includes("failed") ? "error" : "info";
+    showNotice(text, type);
+  }
 
   const isChecking = normalized.includes("checking for updates");
   const isDownloading = normalized.includes("downloading update") ||
@@ -701,7 +1039,7 @@ window.electron.ipcRenderer.on("update-status", (message) => {
         if (!updateModalDismissed && updateModal && !updateModal.classList.contains("hidden")) {
           if (updateStatusText) {
             updateStatusText.innerText =
-              "Update check timed out. Aura Launcher will continue without an update.";
+              "Update check timed out. Aura Launcher Legacy will continue without an update.";
           }
           if (loader) loader.style.display = "none";
           if (progressTrack) progressTrack.style.display = "none";
@@ -751,6 +1089,7 @@ window.electron.ipcRenderer.on("update-progress", (percent) => {
 // --- INIT ---
 normalizeStoredAccounts();
 loadSettings();
+loadAboutInfo();
 renderAccountUI();
 loadClients().catch(err => {
   console.error("Client load failed:", err);

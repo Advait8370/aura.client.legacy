@@ -17,7 +17,7 @@ contextBridge.exposeInMainWorld("electron", {
       const validChannels = [
         "generate-offline-uuid", 
         "login-microsoft", 
-        "select-java", 
+        "select-java", "detect-java", 
         "select-game-dir", 
         "open-external", 
         "load-clients", 
@@ -25,7 +25,10 @@ contextBridge.exposeInMainWorld("electron", {
         "install-client", 
         "repair-client", 
         "delete-client", 
-        "check-for-updates"
+        "check-for-updates",
+        "set-update-channel",
+        "get-app-info",
+        "copy-diagnostics"
       ];
       if (validChannels.includes(channel)) {
         return ipcRenderer.invoke(channel, data);
@@ -36,7 +39,8 @@ contextBridge.exposeInMainWorld("electron", {
         "download-progress", 
         "launch-status", 
         "launch-log", 
-        "minecraft-closed", 
+        "minecraft-closed",
+        "launch-error", 
         "update-status", 
         "update-progress"
       ];
